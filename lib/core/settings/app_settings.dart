@@ -1,10 +1,9 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Mirrors the driver app AppSettings: persists API base, tokens, and last phone.
+/// Mirrors the driver app AppSettings: persists tokens + last login hints.
 class AppSettings {
   AppSettings._(this._prefs);
 
-  static const String _kApiBase = 'tricykab_api_base';
   static const String _kAccessToken = 'tricykab_access_token';
   static const String _kRefreshToken = 'tricykab_refresh_token';
   static const String _kPhone = 'tricykab_last_phone';
@@ -15,17 +14,6 @@ class AppSettings {
   static Future<AppSettings> load() async {
     final prefs = await SharedPreferences.getInstance();
     return AppSettings._(prefs);
-  }
-
-  String get apiBase => _prefs.getString(_kApiBase)?.trim() ?? '';
-
-  Future<void> setApiBase(String value) async {
-    final cleaned = value.trim();
-    if (cleaned.isEmpty) {
-      await _prefs.remove(_kApiBase);
-    } else {
-      await _prefs.setString(_kApiBase, cleaned);
-    }
   }
 
   String? get accessToken => _prefs.getString(_kAccessToken);

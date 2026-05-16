@@ -130,25 +130,34 @@ class DriverCard extends StatelessWidget {
             const SizedBox(height: 12),
             const Divider(height: 1, color: AppColors.borderLight),
             const SizedBox(height: 10),
-            Row(
+            Wrap(
+              spacing: 16,
+              runSpacing: 8,
               children: [
-                if (plateNumber != null && plateNumber!.isNotEmpty) ...[
-                  const Icon(Icons.electric_rickshaw, size: 14, color: AppColors.textMuted),
-                  const SizedBox(width: 4),
-                  Text(
-                    'Plate: $plateNumber',
-                    style: const TextStyle(color: AppColors.textMuted, fontSize: 12),
+                if (plateNumber != null && plateNumber!.isNotEmpty)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.electric_rickshaw, size: 14, color: AppColors.textMuted),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Plate: $plateNumber',
+                        style: const TextStyle(color: AppColors.textMuted, fontSize: 12),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 16),
-                ],
-                if (licenseVerified) ...[
-                  const Icon(Icons.verified_user, size: 14, color: AppColors.textMuted),
-                  const SizedBox(width: 4),
-                  const Text(
-                    'License verified',
-                    style: TextStyle(color: AppColors.textMuted, fontSize: 12),
+                if (licenseVerified)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.verified_user, size: 14, color: AppColors.textMuted),
+                      const SizedBox(width: 4),
+                      const Text(
+                        'License verified',
+                        style: TextStyle(color: AppColors.textMuted, fontSize: 12),
+                      ),
+                    ],
                   ),
-                ],
               ],
             ),
           ],

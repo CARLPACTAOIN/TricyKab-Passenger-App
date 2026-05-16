@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../data/passenger_repository.dart';
+import '../../../shared/widgets/dispute_sheet.dart';
 import '../../../shared/widgets/info_row.dart';
 import '../../../shared/widgets/status_badge.dart';
 
@@ -20,6 +23,10 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   Map<String, dynamic>? _data;
   String? _err;
   int? _selectedStars;
+  bool _isSubmittingRating = false;
+  bool _ratingSubmitted = false;
+  Timer? _retryTimer;
+  int _loadAttempts = 0;
 
   @override
   void initState() {
@@ -27,13 +34,64 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     _load();
   }
 
+  @override
+  void dispose() {
+    _retryTimer?.cancel();
+    super.dispose();
+  }
+
   Future<void> _load() async {
     try {
       final data = await widget.repo.receipt(widget.bookingId);
       if (!mounted) return;
-      setState(() => _data = data);
+      _retryTimer?.cancel();
+      final existingRating = data['trip_rating'] as int?;
+      setState(() {
+        _data = data;
+        _err = null;
+        if (existingRating != null) {
+          _selectedStars = existingRating;
+          _ratingSubmitted = true;
+        }
+      });
     } catch (e) {
-      if (mounted) setState(() => _err = '$e');
+      if (!mounted) return;
+      setState(() => _err = '$e');
+      if (_loadAttempts < 40) {
+        _retryTimer?.cancel();
+        _retryTimer = Timer(const Duration(milliseconds: 900), () {
+          _loadAttempts++;
+          _load();
+        });
+      }
+    }
+  }
+
+  Future<void> _submitRating(int tripId, int rating) async {
+    setState(() {
+      _selectedStars = rating;
+      _isSubmittingRating = true;
+    });
+
+    try {
+      await widget.repo.submitTripRating(tripId, rating);
+      if (!mounted) return;
+      setState(() {
+        _isSubmittingRating = false;
+        _ratingSubmitted = true;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Thank you! Your rating has been submitted.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _selectedStars = null; // Reset selection on failure
+        _isSubmittingRating = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$e'), backgroundColor: AppColors.danger),
+      );
     }
   }
 
@@ -41,6 +99,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
   Widget build(BuildContext context) {
     final receiptNumber = _data?['receipt_number']?.toString();
     final payload = (_data?['payload'] as Map?)?.cast<String, dynamic>();
+    final tripId = _data?['trip_id'] as int?;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -102,7 +161,7 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                     const SizedBox(height: 12),
                     _paymentCard(payload, receiptNumber),
                     const SizedBox(height: 12),
-                    _ratingCard(payload),
+                    _ratingCard(_data ?? {}, tripId),
                   ],
                   const SizedBox(height: 16),
                   Row(
@@ -124,6 +183,38 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
                         ),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 8),
+                  // PRD §7.19 — dispute filing
+                  TextButton.icon(
+                    onPressed: _data == null
+                        ? null
+                        : () async {
+                            await DisputeSheet.show(
+                              context,
+                              onSubmit: (type, desc) =>
+                                  widget.repo.submitDispute(
+                                bookingId: widget.bookingId,
+                                disputeType: type,
+                                description: desc,
+                              ),
+                            );
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                    'Report submitted. Our team will review it shortly.'),
+                                backgroundColor: AppColors.primary,
+                              ),
+                            );
+                          },
+                    icon: const Icon(Icons.flag_outlined,
+                        size: 15, color: AppColors.textMuted),
+                    label: const Text(
+                      'Report an Issue',
+                      style: TextStyle(
+                          color: AppColors.textMuted, fontSize: 13),
+                    ),
                   ),
                 ],
               ),
@@ -219,8 +310,9 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
     );
   }
 
-  Widget _ratingCard(Map<String, dynamic> payload) {
-    final driverName = payload['driver_name']?.toString();
+  Widget _ratingCard(Map<String, dynamic> receipt, int? tripId) {
+    final driverName = receipt['driver_name']?.toString();
+    final canRate = receipt['can_rate'] == true;
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -249,16 +341,9 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
             children: List.generate(5, (i) {
               final filled = (_selectedStars ?? 0) > i;
               return GestureDetector(
-                onTap: () {
-                  setState(() => _selectedStars = i + 1);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'Thanks! Driver ratings will be saved server-side soon (PRD §15 deferred).',
-                      ),
-                    ),
-                  );
-                },
+                onTap: _ratingSubmitted || _isSubmittingRating || tripId == null || !canRate
+                    ? null
+                    : () => _submitRating(tripId, i + 1),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 6),
                   child: Icon(
@@ -271,11 +356,31 @@ class _ReceiptScreenState extends State<ReceiptScreen> {
             }),
           ),
           const SizedBox(height: 8),
-          Text(
-            'Rating submission is a deferred PRD feature for the pilot.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: AppColors.textMuted.withValues(alpha: 0.8), fontSize: 10),
-          ),
+          if (_isSubmittingRating)
+            const Padding(
+              padding: EdgeInsets.only(top: 4.0),
+              child: SizedBox(
+                height: 12,
+                width: 12,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            )
+          else
+            Text(
+              _ratingSubmitted
+                  ? 'Rating submitted successfully.'
+                  : (tripId == null
+                      ? 'Trip data unavailable for rating.'
+                      : (!canRate
+                          ? 'You have already rated this trip.'
+                          : 'Tap a star to rate your trip.')),
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: _ratingSubmitted ? AppColors.success : AppColors.textMuted.withValues(alpha: 0.8),
+                fontSize: 10,
+                fontWeight: _ratingSubmitted ? FontWeight.bold : FontWeight.normal,
+              ),
+            ),
         ],
       ),
     );

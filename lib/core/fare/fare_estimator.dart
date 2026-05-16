@@ -26,10 +26,12 @@ class FareEstimate {
 class FareEstimator {
   FareEstimator._();
 
-  static const double _baseShared = 35; // PRD pilot baseline (Kabacan TODA).
-  static const double _perKmShared = 8;
-  static const double _baseSpecial = 60;
-  static const double _perKmSpecial = 18;
+  static const double _baseShared = 15;
+  static const double _perKmShared = 2.50;
+  static const double _minDistance = 2.0;
+  static const double _baseSpecial = 50;
+  static const double _perKmSpecial = 5;
+  static const double _multiplierSpecial = 1.5;
 
   static FareEstimate estimate({
     required LatLng pickup,
@@ -38,8 +40,11 @@ class FareEstimator {
   }) {
     final km = _haversineKm(pickup, destination);
     final minutes = math.max(1, (km / 0.25).round()); // ~15 km/h average
+    
+    final chargeableKm = math.max(0.0, km - _minDistance);
+
     if (rideType.toUpperCase() == 'SPECIAL') {
-      final amount = _baseSpecial + (km * _perKmSpecial);
+      final amount = _baseSpecial + (chargeableKm * _perKmSpecial * _multiplierSpecial);
       return FareEstimate(
         distanceKm: km,
         durationMinutes: minutes,
@@ -48,7 +53,7 @@ class FareEstimator {
         suggestedSpecialMax: _round(amount * 1.25),
       );
     }
-    final amount = _baseShared + (km * _perKmShared);
+    final amount = _baseShared + (chargeableKm * _perKmShared);
     return FareEstimate(
       distanceKm: km,
       durationMinutes: minutes,
@@ -58,7 +63,7 @@ class FareEstimator {
     );
   }
 
-  static double _round(double value) => (value / 5).roundToDouble() * 5;
+  static double _round(double value) => (value * 100).round() / 100.0;
 
   static double _haversineKm(LatLng a, LatLng b) {
     const r = 6371.0;

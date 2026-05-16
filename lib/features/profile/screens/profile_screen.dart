@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/settings/app_settings.dart';
 import '../../../core/theme/app_colors.dart';
+import '../../../data/passenger_bookings_scope.dart';
 import '../../../data/passenger_repository.dart';
 import '../../../shared/widgets/passenger_bottom_nav.dart';
 
@@ -93,6 +94,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _signOut() async {
+    await PassengerBookingsScope.of(context).clear();
     await widget.settings.clearTokens();
     if (!mounted) return;
     Navigator.of(context).pushNamedAndRemoveUntil('/login', (_) => false);
@@ -106,9 +108,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
         title: const Text('Profile'),
         actions: [
           IconButton(
-            tooltip: 'Settings',
-            onPressed: () => Navigator.of(context).pushNamed('/settings'),
-            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'Sign out',
+            onPressed: () async {
+              await PassengerBookingsScope.of(context).clear();
+              await widget.settings.clearTokens();
+              if (!context.mounted) return;
+              Navigator.of(context).pushNamedAndRemoveUntil('/login', (_) => false);
+            },
+            icon: const Icon(Icons.logout),
           ),
         ],
       ),

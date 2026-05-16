@@ -8,14 +8,15 @@ import '../core/settings/app_settings.dart';
 ///
 /// Returns parsed maps; callers are expected to handle nulls and shape variance.
 class PassengerRepository {
-  PassengerRepository({required this.settings});
+  PassengerRepository({required this.settings, required this.apiBase});
 
   final AppSettings settings;
+  final String apiBase;
 
   String get _base {
-    final raw = settings.apiBase.trim();
+    final raw = apiBase.trim();
     if (raw.isEmpty) {
-      throw StateError('API base not configured. Open Settings to set TRICYKAB_API_BASE.');
+      throw StateError('API base not configured.');
     }
     return raw.endsWith('/') ? raw.substring(0, raw.length - 1) : raw;
   }
@@ -23,7 +24,11 @@ class PassengerRepository {
   Uri _u(String p) => Uri.parse('$_base${p.startsWith('/') ? p : '/$p'}');
 
   Map<String, String> _headers({bool jsonBody = false, String? idempotencyKey}) {
-    final h = <String, String>{'Accept': 'application/json'};
+    final h = <String, String>{
+      'Accept': 'application/json',
+      // Avoid ngrok's interstitial "browser warning" page on tunneled traffic.
+      'ngrok-skip-browser-warning': 'true',
+    };
     if (jsonBody) h['Content-Type'] = 'application/json';
     final token = settings.accessToken;
     if (token != null && token.isNotEmpty) {
@@ -183,6 +188,24 @@ class PassengerRepository {
     return data is Map<String, dynamic> ? data : <String, dynamic>{};
   }
 
+  /// `kind`: `pickup` — passenger at pickup (advances booking like driver arrived when applicable); `dropoff` — passenger at destination during trip.
+  Future<Map<String, dynamic>> passengerAck(int bookingId, String kind) async {
+    final r = await http.post(
+      _u('/bookings/$bookingId/passenger-ack'),
+      headers: _headers(
+        jsonBody: true,
+        idempotencyKey: 'passenger-ack-$bookingId-$kind-${DateTime.now().microsecondsSinceEpoch}',
+      ),
+      body: jsonEncode({'kind': kind}),
+    );
+    final m = await _decode(r);
+    if (r.statusCode >= 400 || m['success'] != true) {
+      throw _apiError(m, r.statusCode, 'Acknowledgement failed');
+    }
+    final data = m['data'];
+    return data is Map<String, dynamic> ? data : <String, dynamic>{};
+  }
+
   Future<Map<String, dynamic>> receipt(int bookingId) async {
     final r = await http.get(_u('/bookings/$bookingId/receipt'), headers: _headers());
     final m = await _decode(r);
@@ -191,6 +214,44 @@ class PassengerRepository {
     }
     final data = m['data'];
     return data is Map<String, dynamic> ? data : <String, dynamic>{};
+  }
+
+  Future<void> submitTripRating(int tripId, int rating) async {
+    final r = await http.post(
+      _u('/trips/$tripId/rate'),
+      headers: _headers(
+        jsonBody: true,
+        idempotencyKey: 'trip-rate-$tripId',
+      ),
+      body: jsonEncode({'rating': rating}),
+    );
+    final m = await _decode(r);
+    if (r.statusCode >= 400 || m['success'] != true) {
+      throw _apiError(m, r.statusCode, 'Failed to submit rating');
+    }
+  }
+
+  /// PRD §7.19 — file a dispute against a completed/actioned booking.
+  ///
+  /// [disputeType] must be one of: FARE, NO_SHOW, GPS, CONDUCT, SAFETY, OTHER.
+  /// [description] is a mandatory free-text explanation (10–1000 chars).
+  Future<void> submitDispute({
+    required int bookingId,
+    required String disputeType,
+    required String description,
+  }) async {
+    final r = await http.post(
+      _u('/bookings/$bookingId/dispute'),
+      headers: _headers(
+        jsonBody: true,
+        idempotencyKey: 'dispute-$bookingId-${DateTime.now().microsecondsSinceEpoch}',
+      ),
+      body: jsonEncode({'dispute_type': disputeType, 'description': description}),
+    );
+    final m = await _decode(r);
+    if (r.statusCode >= 400 || m['success'] != true) {
+      throw _apiError(m, r.statusCode, 'Failed to submit dispute');
+    }
   }
 
   Future<void> sos({

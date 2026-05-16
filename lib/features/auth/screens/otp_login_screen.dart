@@ -239,11 +239,7 @@ class _OtpLoginScreenState extends State<OtpLoginScreen> {
             Positioned(
               top: 8,
               right: 8,
-              child: IconButton(
-                tooltip: 'Settings',
-                icon: const Icon(Icons.settings_outlined, color: AppColors.textMuted),
-                onPressed: () => Navigator.of(context).pushNamed('/settings'),
-              ),
+              child: const SizedBox.shrink(),
             ),
           ],
         ),

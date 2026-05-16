@@ -314,7 +314,7 @@ class _BookRideScreenState extends State<BookRideScreen> {
           IconButton(
             icon: const Icon(Icons.account_circle_outlined),
             color: AppColors.textMuted,
-            onPressed: () => Navigator.of(context).pushNamed('/settings'),
+            onPressed: () => Navigator.of(context).pushNamed('/profile'),
           ),
         ],
       ),

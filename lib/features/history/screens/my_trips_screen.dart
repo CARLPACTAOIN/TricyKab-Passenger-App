@@ -1,19 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
-import '../../../core/settings/app_settings.dart';
 import '../../../core/theme/app_colors.dart';
-import '../../../data/passenger_repository.dart';
+import '../../../data/passenger_bookings_scope.dart';
 import '../../../shared/widgets/app_brand.dart';
 import '../../../shared/widgets/passenger_bottom_nav.dart';
 import '../../../shared/widgets/status_badge.dart';
 
 /// Mockup parity: TricyKab/mockups/passenger/07-trip-history.html
 class MyTripsScreen extends StatefulWidget {
-  const MyTripsScreen({super.key, required this.repo, required this.settings});
-
-  final PassengerRepository repo;
-  final AppSettings settings;
+  const MyTripsScreen({super.key});
 
   @override
   State<MyTripsScreen> createState() => _MyTripsScreenState();
@@ -22,33 +18,19 @@ class MyTripsScreen extends StatefulWidget {
 enum _Filter { all, completed, cancelled }
 
 class _MyTripsScreenState extends State<MyTripsScreen> {
-  List<Map<String, dynamic>> _items = const <Map<String, dynamic>>[];
-  bool _loading = true;
-  String? _err;
   _Filter _filter = _Filter.all;
+  bool _loadedOnce = false;
 
   @override
-  void initState() {
-    super.initState();
-    _load();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_loadedOnce) return;
+    _loadedOnce = true;
+    PassengerBookingsScope.of(context).loadBookings(forceNetwork: false);
   }
 
-  Future<void> _load() async {
-    try {
-      final data = await widget.repo.myBookings();
-      if (!mounted) return;
-      setState(() {
-        _items = data;
-        _loading = false;
-      });
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _err = '$e';
-          _loading = false;
-        });
-      }
-    }
+  Future<void> _refresh() async {
+    await PassengerBookingsScope.of(context).loadBookings(forceNetwork: true);
   }
 
   bool _matchesFilter(Map<String, dynamic> b) {
@@ -66,7 +48,7 @@ class _MyTripsScreenState extends State<MyTripsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final filtered = _items.where(_matchesFilter).toList(growable: false);
+    final store = PassengerBookingsScope.of(context);
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -99,61 +81,76 @@ class _MyTripsScreenState extends State<MyTripsScreen> {
       ),
       body: SafeArea(
         top: false,
-        child: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : _err != null
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(24),
-                      child: Text(_err!,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(color: AppColors.danger)),
-                    ),
-                  )
-                : RefreshIndicator(
-                    onRefresh: _load,
-                    child: filtered.isEmpty
-                        ? _emptyState()
-                        : ListView(
-                            padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+        child: ListenableBuilder(
+          listenable: store,
+          builder: (context, _) {
+            final items = store.bookings;
+            if (items == null && store.bookingsLoadError == null) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (store.bookingsLoadError != null && items == null) {
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(
+                    store.bookingsLoadError!,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: AppColors.danger),
+                  ),
+                ),
+              );
+            }
+            final filtered = (items ?? const <Map<String, dynamic>>[])
+                .where(_matchesFilter)
+                .toList(growable: false);
+
+            return RefreshIndicator(
+              onRefresh: _refresh,
+              child: filtered.isEmpty
+                  ? _emptyState()
+                  : ListView(
+                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+                      children: [
+                        const Text(
+                          'Trip History',
+                          style: TextStyle(
+                            color: AppColors.textPrimary,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          store.bookingsFetchedAt != null
+                              ? 'Pull down to refresh'
+                              : 'Your recent trips',
+                          style: const TextStyle(color: AppColors.textMuted, fontSize: 12),
+                        ),
+                        const SizedBox(height: 16),
+                        Container(
+                          decoration: BoxDecoration(
+                            color: AppColors.cardBackground,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: AppColors.border, width: 0.5),
+                          ),
+                          child: Column(
                             children: [
-                              const Text(
-                                'Trip History',
-                                style: TextStyle(
-                                  color: AppColors.textPrimary,
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.w800,
+                              for (var i = 0; i < filtered.length; i++) ...[
+                                _TripRow(
+                                  booking: filtered[i],
+                                  onTap: () => _open(filtered[i]),
                                 ),
-                              ),
-                              const SizedBox(height: 4),
-                              const Text(
-                                'Your recent trips',
-                                style: TextStyle(color: AppColors.textMuted, fontSize: 12),
-                              ),
-                              const SizedBox(height: 16),
-                              Container(
-                                decoration: BoxDecoration(
-                                  color: AppColors.cardBackground,
-                                  borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(color: AppColors.border, width: 0.5),
-                                ),
-                                child: Column(
-                                  children: [
-                                    for (var i = 0; i < filtered.length; i++) ...[
-                                      _TripRow(
-                                        booking: filtered[i],
-                                        onTap: () => _open(filtered[i]),
-                                      ),
-                                      if (i != filtered.length - 1)
-                                        const Divider(
-                                            height: 1, color: AppColors.borderLight),
-                                    ],
-                                  ],
-                                ),
-                              ),
+                                if (i != filtered.length - 1)
+                                  const Divider(height: 1, color: AppColors.borderLight),
+                              ],
                             ],
                           ),
-                  ),
+                        ),
+                      ],
+                    ),
+            );
+          },
+        ),
       ),
       bottomNavigationBar: const PassengerBottomNav(current: PassengerNavTab.trips),
     );

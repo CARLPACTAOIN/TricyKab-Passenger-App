@@ -4,6 +4,17 @@ import '../../core/theme/app_colors.dart';
 
 enum PassengerNavTab { book, trips, profile }
 
+int _tabIndex(PassengerNavTab tab) {
+  switch (tab) {
+    case PassengerNavTab.book:
+      return 0;
+    case PassengerNavTab.trips:
+      return 1;
+    case PassengerNavTab.profile:
+      return 2;
+  }
+}
+
 /// Bottom navigation matching mockup 02 (`Book` / `Trips` / `Profile`).
 ///
 /// "Profile" surfaces the Settings screen (api base + sign out) for the pilot;
@@ -15,15 +26,29 @@ class PassengerBottomNav extends StatelessWidget {
 
   void _onTap(BuildContext context, PassengerNavTab tab) {
     if (tab == current) return;
+    final from = _tabIndex(current);
+    final to = _tabIndex(tab);
     switch (tab) {
       case PassengerNavTab.book:
-        Navigator.of(context).pushNamedAndRemoveUntil('/book', (_) => false);
+        Navigator.of(context).pushNamedAndRemoveUntil(
+          '/book',
+          (_) => false,
+          arguments: {'fromTab': from, 'toTab': to},
+        );
         break;
       case PassengerNavTab.trips:
-        Navigator.of(context).pushNamedAndRemoveUntil('/trips', (_) => false);
+        Navigator.of(context).pushNamedAndRemoveUntil(
+          '/trips',
+          (_) => false,
+          arguments: {'fromTab': from, 'toTab': to},
+        );
         break;
       case PassengerNavTab.profile:
-        Navigator.of(context).pushNamedAndRemoveUntil('/profile', (_) => false);
+        Navigator.of(context).pushNamedAndRemoveUntil(
+          '/profile',
+          (_) => false,
+          arguments: {'fromTab': from, 'toTab': to},
+        );
         break;
     }
   }

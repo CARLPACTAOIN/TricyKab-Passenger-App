@@ -17,6 +17,7 @@ import '../../../shared/widgets/route_timeline_card.dart';
 import '../../../shared/widgets/sos_floating_button.dart';
 import '../../../shared/widgets/status_badge.dart';
 import '../../../core/geo/map_geometry.dart';
+import '../../../core/geo/osrm_service.dart';
 
 /// Active trip screen — covers all three mockup states:
 ///   - 03 Searching driver  (booking.status == SEARCHING_DRIVER)
@@ -40,6 +41,9 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
   String? _err;
   bool _cancelling = false;
   bool _navigatedToReceipt = false;
+  DateTime? _completedSeenAt;
+  bool _ackPickupBusy = false;
+  bool _ackDropoffBusy = false;
   final MapController _mapController = MapController();
 
   @override
@@ -69,16 +73,58 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
         _data = data;
         _err = null;
       });
+      if (status != 'COMPLETED') {
+        _completedSeenAt = null;
+      }
+      final receiptReady = data['receipt_available'] == true;
       if (status == 'COMPLETED' && !_navigatedToReceipt) {
-        _navigatedToReceipt = true;
-        _pollTimer?.cancel();
-        Future.microtask(() {
-          if (!mounted) return;
-          Navigator.of(context).pushReplacementNamed('/receipt', arguments: widget.bookingId);
-        });
+        _completedSeenAt ??= DateTime.now();
+        final waited = DateTime.now().difference(_completedSeenAt!);
+        final bool go =
+            receiptReady || waited > const Duration(seconds: 45);
+        if (go) {
+          _navigatedToReceipt = true;
+          _pollTimer?.cancel();
+          Future.microtask(() {
+            if (!mounted) return;
+            Navigator.of(context).pushReplacementNamed('/receipt', arguments: widget.bookingId);
+          });
+        }
       }
     } catch (e) {
       if (mounted) setState(() => _err = '$e');
+    }
+  }
+
+  Future<void> _passengerAckPickup() async {
+    setState(() => _ackPickupBusy = true);
+    try {
+      await widget.repo.passengerAck(widget.bookingId, 'pickup');
+      await _refreshOnce();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You’re marked at the pickup — your driver can start when everyone’s ready.')),
+      );
+    } catch (e) {
+      if (mounted) setState(() => _err = '$e');
+    } finally {
+      if (mounted) setState(() => _ackPickupBusy = false);
+    }
+  }
+
+  Future<void> _passengerAckDropoff() async {
+    setState(() => _ackDropoffBusy = true);
+    try {
+      await widget.repo.passengerAck(widget.bookingId, 'dropoff');
+      await _refreshOnce();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Destination arrival noted for your driver.')),
+      );
+    } catch (e) {
+      if (mounted) setState(() => _err = '$e');
+    } finally {
+      if (mounted) setState(() => _ackDropoffBusy = false);
     }
   }
 
@@ -200,6 +246,8 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
       case 'SEARCHING_DRIVER':
         return 'SEARCHING';
       case 'DRIVER_ASSIGNED':
+      case 'DRIVER_ON_THE_WAY':
+      case 'DRIVER_ARRIVED':
         return 'ASSIGNED';
       case 'TRIP_IN_PROGRESS':
         return 'LIVE';
@@ -250,6 +298,8 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
       case 'SEARCHING_DRIVER':
         return AppColors.badgeSearchingBg;
       case 'DRIVER_ASSIGNED':
+      case 'DRIVER_ON_THE_WAY':
+      case 'DRIVER_ARRIVED':
         return AppColors.badgeAssignedBg;
       case 'TRIP_IN_PROGRESS':
         return AppColors.badgeInProgressBg;
@@ -264,6 +314,8 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
       case 'SEARCHING_DRIVER':
         return AppColors.badgeSearchingText;
       case 'DRIVER_ASSIGNED':
+      case 'DRIVER_ON_THE_WAY':
+      case 'DRIVER_ARRIVED':
         return AppColors.badgeAssignedText;
       case 'TRIP_IN_PROGRESS':
         return AppColors.badgeInProgressText;
@@ -281,7 +333,9 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
   ) {
     switch (status) {
       case 'DRIVER_ASSIGNED':
-        return _assignedView(booking, driver);
+      case 'DRIVER_ON_THE_WAY':
+      case 'DRIVER_ARRIVED':
+        return _assignedView(status, booking, driver);
       case 'TRIP_IN_PROGRESS':
         return _inProgressView(booking, trip, driver);
       case 'COMPLETED':
@@ -386,12 +440,16 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
   // ---- Driver assigned view (mockup 04) ----
 
   Widget _assignedView(
+    String status,
     Map<String, dynamic>? booking,
     Map<String, dynamic>? driver,
   ) {
     final pickup = (booking?['pickup'] as Map?)?.cast<String, dynamic>();
     final dest = (booking?['destination'] as Map?)?.cast<String, dynamic>();
     final fare = booking?['fare_amount']?.toString();
+    final passengerAckPickupAt = booking?['passenger_ack_pickup_at'];
+    final canAckPickup = (status == 'DRIVER_ASSIGNED' || status == 'DRIVER_ON_THE_WAY') &&
+        passengerAckPickupAt == null;
     final driverPos = _maybeLatLng(
       (driver?['last_location'] as Map?)?['latitude'],
       (driver?['last_location'] as Map?)?['longitude'],
@@ -404,11 +462,13 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
         children: [
-          _miniMap(pickup: pickupPos, driver: driverPos, height: 200),
+          _PassengerMiniMap(pickup: pickupPos, driver: driverPos, height: 200),
           const SizedBox(height: 16),
           EtaBanner(
-            label: 'Driver arriving in',
-            value: '$etaMinutes min',
+            label: status == 'DRIVER_ARRIVED' ? 'Status' : 'Driver arriving in',
+            value: status == 'DRIVER_ARRIVED'
+                ? 'At pickup'
+                : '$etaMinutes min',
           ),
           const SizedBox(height: 16),
           if (driver != null)
@@ -453,6 +513,51 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
             const SizedBox(height: 12),
             _ErrorBanner(message: _err!),
           ],
+          if (canAckPickup) ...[
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: _ackPickupBusy ? null : _passengerAckPickup,
+              icon: _ackPickupBusy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Icon(Icons.location_on_outlined),
+              label: Text(_ackPickupBusy ? 'Saving…' : 'I’m at the pickup'),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size.fromHeight(48),
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Tap when you’ve reached the pickup point — we’ll treat it like a driver “arrived” signal for your ride.',
+              style: TextStyle(color: AppColors.textMuted, fontSize: 12, height: 1.35),
+            ),
+          ],
+          if (passengerAckPickupAt != null && status != 'DRIVER_ARRIVED') ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.success.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.success.withValues(alpha: 0.25)),
+              ),
+              child: const Row(
+                children: [
+                  Icon(Icons.check_circle_outline, color: AppColors.success, size: 20),
+                  SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'You’ve confirmed you’re at the pickup. Waiting for your driver to arrive and start the trip.',
+                      style: TextStyle(color: AppColors.textSecondary, fontSize: 12, height: 1.35),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 16),
           OutlinedButton.icon(
             onPressed: _cancelling ? null : _cancel,
@@ -487,6 +592,8 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
     Map<String, dynamic>? trip,
     Map<String, dynamic>? driver,
   ) {
+    final dropoffAckAt = booking?['passenger_ack_dropoff_at'];
+    final canAckDropoff = dropoffAckAt == null;
     final pickup = (booking?['pickup'] as Map?)?.cast<String, dynamic>();
     final dest = (booking?['destination'] as Map?)?.cast<String, dynamic>();
     final pickupPos = _maybeLatLng(pickup?['latitude'], pickup?['longitude']);
@@ -558,7 +665,7 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 96),
               children: [
-                _miniMap(
+                _PassengerMiniMap(
                   pickup: pickupPos,
                   destination: destPos,
                   driver: lastLoc,
@@ -621,6 +728,50 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
                 if (_err != null) ...[
                   const SizedBox(height: 12),
                   _ErrorBanner(message: _err!),
+                ],
+                if (canAckDropoff) ...[
+                  const SizedBox(height: 16),
+                  FilledButton.icon(
+                    onPressed: _ackDropoffBusy ? null : _passengerAckDropoff,
+                    icon: _ackDropoffBusy
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Icon(Icons.flag_outlined),
+                    label: Text(_ackDropoffBusy ? 'Saving…' : 'I’ve arrived at my destination'),
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size.fromHeight(48),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Tap when you’ve reached your drop-off — your driver sees this as your arrival at the stop.',
+                    style: TextStyle(color: AppColors.textMuted, fontSize: 12, height: 1.35),
+                  ),
+                ] else if (dropoffAckAt != null) ...[
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppColors.success.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppColors.success.withValues(alpha: 0.25)),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.check_circle_outline, color: AppColors.success, size: 20),
+                        SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'You’ve marked arrival at your destination.',
+                            style: TextStyle(color: AppColors.textSecondary, fontSize: 12, height: 1.35),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ],
               ],
             ),
@@ -685,63 +836,190 @@ class _ActiveTripScreenState extends State<ActiveTripScreen> {
     if (dlat == null || dlng == null) return null;
     return LatLng(dlat, dlng);
   }
+}
 
-  Widget _miniMap({
-    LatLng? pickup,
-    LatLng? destination,
-    LatLng? driver,
-    required double height,
-  }) {
+class _PassengerMiniMap extends StatefulWidget {
+  final LatLng? pickup;
+  final LatLng? destination;
+  final LatLng? driver;
+  final double height;
+
+  const _PassengerMiniMap({
+    required this.pickup,
+    this.destination,
+    this.driver,
+    required this.height,
+  });
+
+  @override
+  State<_PassengerMiniMap> createState() => _PassengerMiniMapState();
+}
+
+class _PassengerMiniMapState extends State<_PassengerMiniMap> {
+  final MapController _mapController = MapController();
+  bool _fitted = false;
+  List<LatLng>? _routePoints;
+  bool _routeLoading = false;
+  LatLng? _lastFrom;
+  LatLng? _lastTo;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchRoute();
+  }
+
+  @override
+  void didUpdateWidget(covariant _PassengerMiniMap oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.pickup != oldWidget.pickup || widget.destination != oldWidget.destination) {
+      _fetchRoute();
+    }
+    if (widget.driver != oldWidget.driver) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _fitBounds();
+      });
+    }
+  }
+
+  Future<void> _fetchRoute() async {
+    final from = widget.pickup;
+    final to = widget.destination;
+    if (from == null || to == null) return;
+    if (from == _lastFrom && to == _lastTo && _routePoints != null) return;
+
+    setState(() => _routeLoading = true);
+    _lastFrom = from;
+    _lastTo = to;
+
+    final points = await OsrmService.fetchRoute(from, to);
+    if (!mounted) return;
+    setState(() {
+      _routeLoading = false;
+      _routePoints = points;
+    });
+  }
+
+  void _fitBounds() {
+    final points = <LatLng>[
+      if (widget.pickup != null) widget.pickup!,
+      if (widget.destination != null) widget.destination!,
+      if (widget.driver != null) widget.driver!,
+    ];
+    if (points.isEmpty) return;
+    if (points.length == 1) {
+      _mapController.move(points.first, 15.5);
+      return;
+    }
+    final bounds = LatLngBounds.fromPoints(points);
+    _mapController.fitCamera(
+      CameraFit.bounds(
+        bounds: bounds,
+        padding: const EdgeInsets.all(40),
+        maxZoom: 17,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final markers = <Marker>[
-      if (pickup != null)
+      if (widget.pickup != null)
         Marker(
-          point: pickup,
+          point: widget.pickup!,
           width: 32,
           height: 32,
           child: const _MiniPin(color: AppColors.success, icon: Icons.my_location),
         ),
-      if (destination != null)
+      if (widget.destination != null)
         Marker(
-          point: destination,
+          point: widget.destination!,
           width: 32,
           height: 32,
           child: const _MiniPin(color: AppColors.danger, icon: Icons.place),
         ),
-      if (driver != null)
+      if (widget.driver != null)
         Marker(
-          point: driver,
+          point: widget.driver!,
           width: 36,
           height: 36,
           child: const _MiniPin(color: AppColors.primary, icon: Icons.electric_rickshaw),
         ),
     ];
-    final center = driver ?? pickup ?? destination ?? const LatLng(7.1117, 124.8419);
+
+    final center = widget.driver ?? widget.pickup ?? widget.destination ?? const LatLng(7.1117, 124.8419);
+
     return ClipRRect(
       borderRadius: BorderRadius.circular(16),
       child: SizedBox(
-        height: height,
-        child: FlutterMap(
-          mapController: _mapController,
-          options: MapOptions(initialCenter: center, initialZoom: 15),
+        height: widget.height,
+        child: Stack(
           children: [
-            TileLayer(
-              urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              userAgentPackageName: 'com.tricykab.passenger',
-            ),
-            if (pickup != null &&
-                destination != null &&
-                distinctMapEndpoints(pickup, destination))
-              PolylineLayer(
-                polylines: [
-                  Polyline(
-                    points: [pickup, destination],
-                    strokeWidth: 3,
-                    color: AppColors.primary,
-                    pattern: StrokePattern.dashed(segments: const [8.0, 6.0]),
-                  ),
-                ],
+            FlutterMap(
+              mapController: _mapController,
+              options: MapOptions(
+                initialCenter: center,
+                initialZoom: 15,
+                interactionOptions: const InteractionOptions(flags: InteractiveFlag.all & ~InteractiveFlag.rotate),
+                onMapReady: () {
+                  if (!_fitted) {
+                    _fitted = true;
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (mounted) _fitBounds();
+                    });
+                  }
+                },
               ),
-            MarkerLayer(markers: markers),
+              children: [
+                TileLayer(
+                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  userAgentPackageName: 'com.tricykab.passenger',
+                ),
+                if (_routePoints != null && _routePoints!.length >= 2)
+                  PolylineLayer(
+                    polylines: [
+                      Polyline(
+                        points: _routePoints!,
+                        strokeWidth: 4,
+                        color: AppColors.primary,
+                      ),
+                    ],
+                  )
+                else if (widget.pickup != null && widget.destination != null && distinctMapEndpoints(widget.pickup!, widget.destination!))
+                  PolylineLayer(
+                    polylines: [
+                      Polyline(
+                        points: [widget.pickup!, widget.destination!],
+                        strokeWidth: 3,
+                        color: AppColors.primary.withValues(alpha: 0.5),
+                        pattern: StrokePattern.dashed(segments: const [8.0, 6.0]),
+                      ),
+                    ],
+                  ),
+                MarkerLayer(markers: markers),
+                const SimpleAttributionWidget(source: Text('OpenStreetMap'), onTap: null),
+              ],
+            ),
+            if (_routeLoading)
+              Positioned(
+                top: 8,
+                right: 8,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.9),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(width: 10, height: 10, child: CircularProgressIndicator(strokeWidth: 1.5, color: AppColors.primary)),
+                      const SizedBox(width: 6),
+                      const Text('Loading route', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+                ),
+              ),
           ],
         ),
       ),

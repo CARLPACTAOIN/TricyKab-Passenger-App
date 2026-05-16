@@ -29,9 +29,10 @@ class InfoRow extends StatelessWidget {
           : null,
       padding: const EdgeInsets.symmetric(vertical: 10),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
+          SizedBox(
+            width: 70,
             child: Text(
               label.toUpperCase(),
               style: const TextStyle(
@@ -42,15 +43,20 @@ class InfoRow extends StatelessWidget {
               ),
             ),
           ),
+          const SizedBox(width: 8),
           if (trailing != null)
-            trailing!
+            Flexible(child: Align(alignment: Alignment.centerRight, child: trailing!))
           else
-            Text(
-              value ?? '—',
-              style: const TextStyle(
-                color: AppColors.textPrimary,
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
+            Flexible(
+              child: Text(
+                value ?? '—',
+                style: const TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  height: 1.35,
+                ),
+                textAlign: TextAlign.end,
               ),
             ),
         ],
